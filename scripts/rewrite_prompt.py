@@ -1,21 +1,20 @@
 #!/usr/bin/env python
 """
-codex-imagegen-fork / rewrite_prompt.py — vision + rewrite 模块
-================================================================
+codex-imagegen-fork / rewrite_prompt.py — vision + rewrite 模块（多段 prompt 版）
+=================================================================================
 
-把"用户中文需求 + 参考图"→"英文 image-gen prompt"。
-由 batch_runner.py 内部调用，让 Mode 2 (form / 跑批) 也享受 skill 的核心 rewrite 能力，
-不再要求用户自己提前 rewrite 好再填表。
+把"用户中文/英文需求 + 参考图"→ N 段独立英文 image-gen prompt（每段对应 1 张图）。
+由 batch_runner.py 内部调用让 Mode 2 (form / 跑批) 也享受 skill 的核心 rewrite 能力。
 
 调用方式:
   CLI:
-    python rewrite_prompt.py --user-prompt-file in.txt --refs r1.png,r2.jpg --out rewritten.txt
+    python rewrite_prompt.py --user-prompt-file in.txt --refs r1.png,r2.jpg --out rewritten.txt --n 5
 
   模块:
     from rewrite_prompt import rewrite
-    english = rewrite(user_prompt="...中文...", reference_images=[Path("r1.png"), ...])
+    prompts = rewrite(user_prompt="...", reference_images=[Path("r1.png"), ...], n=5)
 
-内部: 调 ephone /v1/chat/completions(OpenAI SDK + base_url 重定向)。多模态消息(image_url base64 data URL)。
+内部: ephone /v1/chat/completions(OpenAI SDK + base_url redirect)，多模态(image_url base64)。
 """
 import argparse
 import base64
@@ -27,44 +26,50 @@ from openai import OpenAI
 sys.path.insert(0, str(Path(__file__).parent))
 from _config import load_credentials
 
-# B skill _config.py 没沉淀 LM model 常量,这里 hardcode 默认值
 DEFAULT_LM_MODEL = "gpt-5.5"
 DEFAULT_TIMEOUT_SEC = 600
 
+# n>1 时各段之间的分隔符。LLM 必须在独立行上输出此标记。
+PROMPT_SEP = "---PROMPT-SEP---"
 
-REWRITE_SYSTEM = """You are the prompt-rewriting agent inside the `codex-imagegen-fork` skill (a generic image generation / edit skill, derived from OpenAI Codex's imagegen skill with added vision-verify and Chinese-prompt support).
+
+REWRITE_SYSTEM = f"""You are the prompt-rewriting agent inside the `codex-imagegen-fork` skill (generic image generation / edit skill).
 
 USER GIVES YOU:
-- Zero or more reference images, numbered Image 1, Image 2, ... in the order provided. (0 images = pure text-to-image; ≥1 = edit / composite / variation.)
-- A natural-language request (often Chinese), describing the desired output
+- Zero or more reference images, numbered Image 1, Image 2, ... in the order provided.
+  (0 = pure text-to-image; ≥1 = edit / composite / variation.)
+- A natural-language request (often Chinese)
+- A target count N (how many independent image-gen prompts to produce)
 
-YOUR JOB: produce ONE detailed English image-generation prompt suitable for gpt-image-2.
-The text you output is sent verbatim to gpt-image-2 — no preamble, no markdown fences, no explanation.
+YOUR JOB: produce **N detailed English image-generation prompts**, one per output image.
+Each prompt is sent verbatim to gpt-image-2 as a separate API call — they do NOT share state,
+so each prompt must be self-contained.
 
 == STEP A: Vision verify each image (silently) ==
 For each input image, internally note:
 - key_visuals (subject, pose, composition, UI elements, visible text verbatim)
 - style_summary (rendering style, palette, mood)
-- role in the request (composition anchor / character source / UI template / text-edit target / etc.) — infer from content + user's wording
+- role in the request (composition anchor / character source / UI template / text-edit target / etc.)
 
 == STEP B: Detect task type ==
-Read the user's request and identify which kind of task this is:
 - Single-image edit (modify text / swap element / re-color)
-- Multi-image composite (use Image 1 as style anchor + Image 2/3 as content source)
+- Multi-image composite (Image 1 style anchor + Image 2/3 content source)
 - Pure generation (no refs)
 - Style transfer / variation
-Adapt the output skeleton accordingly. Do NOT impose a fixed "all-in-one ad-banner" template — match the prompt to what the task actually requires.
+Adapt the skeleton accordingly — do NOT impose a fixed game-ad template.
 
-== STEP C: Write the English prompt ==
-A flexible skeleton (fill / drop sections based on task type):
+== STEP C: Build a CandidatePool (if request needs characters) ==
+Scan input images for available characters / subjects. When N>1, lean toward **N different primary characters / subjects** for series variety unless the user clearly asks for variations of a single subject.
+
+== STEP D: Write N independent prompts using this flexible skeleton ==
 
 ```
-Create a [polished | clean | stylized] {orientation} {asset type} in {WxH}, aspect ratio {ratio}.
-Image 1 (<role>): <what Image 1 actually shows — concise visual description>.
-Image 2 (<role>): <what Image 2 actually shows>.
-{... one line per reference image ...}
+Create a [polished | clean | stylized] {{orientation}} {{asset type}} in {{WxH}}, aspect ratio {{ratio}}.
+Image 1 (<role>): <concise visual description of what Image 1 shows>.
+Image 2 (<role>): <...>.
+{{... one line per reference image ...}}
 
-<Brief composition / framing statement: "Design a brand-new composition echoing Image 1's visual language" / "Modify the target image by ..." / etc.>
+<Composition statement: "Design a brand-new composition echoing Image 1's visual language" / "Modify the target image by ..." / etc.>
 Keep about 70% faithful to <reference>, 30% creative.
 
 Main content requirements:
@@ -74,26 +79,35 @@ Main content requirements:
 
 Quality and style requirements:
 - All Chinese text rendered crisply and readably DIRECTLY in the image.
-- Do NOT leave any text container blank / use placeholder pseudo-Chinese / use English subtitles (unless the user wants English).
-- No raw screenshot artifacts / phone UI / FPS overlay / watermarks / app-store badges / debug text / blank text containers.
-- <Polished commercial finish, specific style notes from StyleSummary>.
-- {Orientation} composition only, {WxH}.
+- Do NOT leave any text container blank / use placeholder pseudo-Chinese / use English subtitles (unless user wants English).
+- No raw screenshot artifacts / phone UI / FPS / watermarks / app-store badges / debug text / blank text containers.
+- <Polished commercial finish, style notes>.
+- {{Orientation}} composition only, {{WxH}}.
 ```
 
 == CRITICAL RULES ==
-1. Single primary subject focus: 1 main subject + ≤2 supporting elements. NEVER write multi-panel / split-screen / N-grid / collage / "5 panels showing..." — that wrecks text rendering and produces collage output.
-2. Strip batch-control language from user's Chinese: words like "分别"/"5张"/"做N张"/"each"/"五张" are about how many independent images to generate — they are NOT visual instructions. Output a single-image description regardless of how many the user asked for; the batch runner handles N via independent sampling.
-3. Every visible text region must specify either:
-   (a) verbatim Chinese characters in double-quotes, OR
-   (b) explicit "leave this position empty / no text here"
-   Never leave text regions unconstrained — gpt-image-2 will fill blanks with hallucinated Chinese.
-4. Style words come from your vision (e.g. `polished 2D illustration`, `semi-realistic CG`, `flat vector`, `photographic`) — never from genre stereotypes / training-prior assumptions.
-5. Output ONLY the English prompt as plain text. NO ```fences```, NO preamble like "Here is the prompt:", NO explanation. The full text you output is forwarded verbatim to gpt-image-2.
+1. **Single primary subject per prompt**: 1 main subject + ≤2 supporting elements. NEVER write multi-panel / split-screen / N-grid / collage in a single prompt.
+2. **STRICTLY 4-5 Chinese text positions per prompt, NEVER MORE THAN 5**. Fewer = empty-looking; more = dilutes gpt-image-2 text rendering budget. Be aggressive about cutting.
+3. **Strip batch-control language from user's Chinese**: words like "分别"/"5张"/"做N张"/"each" tell you how many prompts to make, NOT what to render. Do NOT echo into prompts.
+4. **Verbatim Chinese**: every text position must specify (a) exact Chinese in double-quotes, OR (b) "leave this position empty". Never unspecified.
+5. **Series variety when N>1**: each prompt features a different primary subject (from CandidatePool) OR clearly different pose / scene. Avoid producing N minor variations of the same subject.
+6. **Style words from your vision** (e.g. `polished 2D illustration`, `semi-realistic CG`, `flat vector`, `photographic`) — never genre stereotypes.
+
+== OUTPUT FORMAT ==
+- If N == 1: output ONLY the single English prompt as plain text. No preamble, no fences.
+- If N >= 2: output N prompts separated by a line containing exactly `{PROMPT_SEP}` (no other chars on that line):
+
+  ```
+  Create a polished landscape ... (full prompt 1) ...
+  {PROMPT_SEP}
+  Create a polished landscape ... (full prompt 2) ...
+  ```
+
+NO preamble like "Here are the prompts:", NO ```fences``` around individual prompts, NO numbering ("Prompt 1:"). The separator line is the only structure marker.
 """
 
 
 def _encode_image(p: Path) -> dict:
-    """把图片文件 encode 成 OpenAI chat 多模态 message 的 image_url part。"""
     with open(p, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     ext = p.suffix.lower()
@@ -109,17 +123,22 @@ def _encode_image(p: Path) -> dict:
     }
 
 
-def rewrite(user_prompt: str, reference_images, model: str = None, verbose: bool = False) -> str:
-    """vision + rewrite。
+def _strip_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
 
-    输入:
-      user_prompt: 用户中文需求(也可英文,会过 rewrite 整理)
-      reference_images: list of Path or str(0+ 张参考图路径; 0 张 = 纯文字生图)
-      model: 覆盖默认 LM model
-      verbose: 打印 rewrite 元信息
 
-    返回: 纯英文 image-gen prompt(无 markdown fences)
-    """
+def rewrite(user_prompt: str, reference_images, n: int = 1, model: str = None, verbose: bool = False) -> list:
+    """vision + rewrite。返回 list[str] of length n。详见模块 docstring。"""
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+
     base_url, api_key = load_credentials()
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT_SEC)
 
@@ -127,10 +146,22 @@ def rewrite(user_prompt: str, reference_images, model: str = None, verbose: bool
     ref_paths = [Path(p) for p in reference_images]
 
     image_contents = [_encode_image(p) for p in ref_paths]
-    user_content = image_contents + [{"type": "text", "text": user_prompt}]
+
+    user_text = user_prompt
+    if n > 1:
+        user_text += (
+            f"\n\n[runner instruction] Produce {n} independent prompts (one per output image), "
+            f"separated by `{PROMPT_SEP}` on its own line. Each prompt should feature a DIFFERENT "
+            f"primary subject so the {n}-image series gives visual variety. Strip any '分别' / "
+            f"'{n} 张' counting words — those tell you how many prompts to make, not what to render."
+        )
+    else:
+        user_text += f"\n\n[runner instruction] Produce 1 prompt (single output image)."
+
+    user_content = image_contents + [{"type": "text", "text": user_text}]
 
     if verbose:
-        print(f"  [rewrite] model={model}  refs={len(ref_paths)}  user_prompt_chars={len(user_prompt)}", flush=True)
+        print(f"  [rewrite] model={model}  refs={len(ref_paths)}  n={n}  user_prompt_chars={len(user_prompt)}", flush=True)
 
     response = client.chat.completions.create(
         model=model,
@@ -139,24 +170,35 @@ def rewrite(user_prompt: str, reference_images, model: str = None, verbose: bool
             {"role": "user", "content": user_content},
         ],
     )
-    text = (response.choices[0].message.content or "").strip()
+    text = _strip_fence(response.choices[0].message.content or "")
 
-    # 防御:剥掉模型偶尔仍包的 ```...``` fence
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
+    if n == 1:
+        return [text]
 
-    return text
+    raw_parts = [p.strip() for p in text.split(PROMPT_SEP)]
+    parts = [_strip_fence(p) for p in raw_parts if p.strip()]
+
+    if len(parts) == 0:
+        print(f"  [rewrite] WARN: LLM returned empty output", file=sys.stderr, flush=True)
+        return [text] * n
+
+    if len(parts) < n:
+        print(f"  [rewrite] WARN: expected {n} prompts, got {len(parts)}; padding with last", file=sys.stderr, flush=True)
+        while len(parts) < n:
+            parts.append(parts[-1])
+    elif len(parts) > n:
+        print(f"  [rewrite] WARN: expected {n} prompts, got {len(parts)}; truncating", file=sys.stderr, flush=True)
+        parts = parts[:n]
+
+    return parts
 
 
 def main():
-    ap = argparse.ArgumentParser(description="rewrite 中文/英文需求 + 0+ 张参考图 → 英文 image-gen prompt")
+    ap = argparse.ArgumentParser(description="rewrite 中文/英文需求 + 0+ 张参考图 → N 段英文 image-gen prompt")
     ap.add_argument("--user-prompt-file", required=True, help="用户需求 prompt 文件")
-    ap.add_argument("--refs", default="", help="comma-separated reference image paths (0+ 张; 空字符串 = 纯文字生图)")
-    ap.add_argument("--out", required=True, help="输出英文 prompt 写到这个文件")
+    ap.add_argument("--refs", default="", help="comma-separated reference image paths (0+ 张; 空 = 纯文字生图)")
+    ap.add_argument("--out", required=True, help="输出文件(N 段用 `---PROMPT-SEP---` 分隔)")
+    ap.add_argument("--n", type=int, default=1, help="期望输出几段独立 prompt(默认 1)")
     ap.add_argument("--model", default=None, help=f"override LM model (default: {DEFAULT_LM_MODEL})")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -169,16 +211,18 @@ def main():
             return 2
 
     try:
-        english = rewrite(user_prompt, refs, model=args.model, verbose=args.verbose)
+        prompts = rewrite(user_prompt, refs, n=args.n, model=args.model, verbose=args.verbose)
     except Exception as e:
         print(f"! rewrite failed: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    Path(args.out).write_text(english, encoding="utf-8")
-    print(f"OK: wrote {args.out} ({len(english)} chars)")
+    out_text = (f"\n{PROMPT_SEP}\n").join(prompts) if args.n > 1 else prompts[0]
+    Path(args.out).write_text(out_text, encoding="utf-8")
+    print(f"OK: wrote {args.out} ({len(out_text)} chars, {len(prompts)} prompts)")
     if args.verbose:
-        print("--- preview ---")
-        print(english[:400])
+        for i, p in enumerate(prompts, 1):
+            print(f"--- prompt {i}/{len(prompts)} (first 200 chars) ---")
+            print(p[:200])
     return 0
 
 
