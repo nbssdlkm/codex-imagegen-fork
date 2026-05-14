@@ -546,7 +546,7 @@ agent 发一条简短消息:
 
 ```
 Phase 1: 同段 prompt × M sampling → M 张候选,写 anchor_pick.html + 改 status="awaiting_picks"
-Phase 2: poll `{batch_id}_anchor_picks.json` (30s/round, timeout 30min);user 浏览器挑 → 保存 JSON 到 out_dir
+Phase 2: poll `{batch_id}_anchor_picks.json` (30s/round, timeout 30min);user 浏览器挑 → 保存 JSON 到 out_dir。期间 result_grid.html 进度页 badge 显示 🟨 等选 anchor + 5s 自动刷新,挑完自动切回 🟦 running。
 Phase 3: copied picked → `{task_id}_01.png` + rewrite N-1 段 anchor-locked → 跑 N-1 张 series
 ```
 
