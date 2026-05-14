@@ -32,6 +32,24 @@ else
   echo "    [skip] No WorkBuddy install detected"
 fi
 
+# _skillhub_meta.json — lets WorkBuddy UI list this skill (without it WB UI doesn't show, even with junction)
+META_PATH="$SKILL_DIR/_skillhub_meta.json"
+if [ -f "$META_PATH" ]; then
+  echo "    [skip] _skillhub_meta.json already exists at $META_PATH"
+else
+  NOW_MS=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
+  cat > "$META_PATH" <<EOF
+{
+  "name": "$SKILL_NAME",
+  "installedAt": $NOW_MS,
+  "source": "marketplace",
+  "iconSource": "$SKILL_NAME",
+  "version": "0.1.2"
+}
+EOF
+  echo "    Created $META_PATH (lets WorkBuddy UI list this skill)"
+fi
+
 echo ""
 echo "==> Verifying dependencies"
 PY="$(command -v python3 || command -v python)"
