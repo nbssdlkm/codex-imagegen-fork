@@ -52,7 +52,7 @@ python scripts/image_gen.py edit --prompt-file X.txt --image a.png --image b.png
 | Mode | When | Agent does |
 |---|---|---|
 | **Mode 1: Interactive** (Workflow below) | User gives **detailed prompt + (optional) image** in chat | Vision verify + write prompt + call image_gen.py |
-| **Mode 2: Form-driven** (Batch UX section) | User only stated **intent**, no detailed prompt (e.g. "我要批量出图") | Silently open form (port 8766), user fills self-serve, agent only executes |
+| **Mode 2: Form-driven** (Batch UX section) | User only stated **intent**, or wants to batch many images | Silently open form, user fills Chinese request (no need to pre-rewrite), `batch_runner` runs vision+rewrite per task (via `scripts/rewrite_prompt.py`) then calls `image_gen.py` — matches Mode 1 capability |
 
 **Routing precedence** (top-to-bottom, first match wins):
 1. User pasted `config.json` / said "跑 batch_<id>" → **Mode 2 trigger execute**
@@ -81,7 +81,7 @@ When the user gave a detailed prompt (and optionally images) in chat, run these 
 - **0 images** → `generate` (text-to-image)
 - **≥1 image, user wants to modify it preserving parts** → `edit` (most edit cases)
 - **≥1 image, user wants new image, image is only style/composition/mood reference** → `generate` (with refs as guidance)
-- **Many distinct prompts (different subjects)** → `generate-batch` with JSONL (do NOT use `--n` for distinct assets; `--n` is variants of ONE prompt)
+- **Many distinct prompts (different subjects)** → `generate-batch` with JSONL (do NOT use `--n` for distinct assets; `--n` is variants of ONE prompt). **N>1 系列任务时各段必须不同主体角色 / 不同 scene**(系列多样性),不要写 N 段 minor pose variations of same hero(等于 1 张图重复 N 次)。
 
 ### Step 2: Vision verify each input image (skip if 0 images)
 Load each image into context via your vision tool. Write a verbatim 1-2 sentence description of what you actually see (subject / palette / composition / any visible text). **Do NOT infer from filename / case_id / user's 题材词** — case_22 hallucination mode. No vision capability → ask user to describe or stop.
@@ -360,7 +360,7 @@ If installation is not possible in this environment, tell the user which depende
 
 For **game ad / 买量素材 / 多张系列爆款复刻**, prefer the sibling skill `game-ad-imagegen` — it has a specialized 6-step vision workflow + T9-style prompt template + Batch UX dedicated to game-ad design. This (B) skill's prompt augmentation (Shared schema, 13-field) targets generic raster tasks (SaaS dashboards / product mockups / scientific diagrams) and produces that aesthetic when applied to game ads.
 
-If you must do game-ad in B (rare, e.g. designer mixed asset types in one batch), use a **T9-style minimal prompt** instead of the 13-field schema: single hero focus, 4-7 verbatim-quoted Chinese text positions, explicit `Keep about 70% faithful, 30% creative`, bullet-list main content. Full T9 template + rationale lives in A skill's Step 4 范本 section.
+If you must do game-ad in B (rare, e.g. designer mixed asset types in one batch), use a **T9-style minimal prompt** instead of the 13-field schema: single hero focus, **STRICTLY 4-5 verbatim-quoted Chinese text positions** (2026-05-14 case_01 实证 — >5 text 位画面拥挤、人物精致度被牺牲), explicit `Keep about 70% faithful, 30% creative`, bullet-list main content. Full T9 template + rationale lives in A skill's Step 4 范本 section.
 
 ### First-time setup (zero-config recruit path) — 2026-05-13 added
 
