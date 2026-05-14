@@ -1,62 +1,65 @@
 ---
 name: "codex-imagegen-fork"
 description: |
-  通用图片生成 / 编辑 / 修改 skill。适合**非游戏买量广告特化**的通用图片任务:单图修改 / 纯文字生图 / 任意题材海报 / 头像 / 图标 / sprite / mockup / 透明背景图 / 插画 / 照片合成。
-  支持 0 张图(纯文字生图,走 `generate` 子命令)和 ≥1 张图(参考图编辑,走 `edit` 子命令),runner 自动选。
-  **跟 `game-ad-imagegen` (A skill) 的差异化**:A 专做游戏买量广告(爆款复刻 / 多张系列 / 6 步 vision 工作流 / 必须 ≥1 张图),B 做通用图片任务(单图修改 / 0 图文生图 / 任意题材 / 单张为主)。设计师如果是"复刻爆款 + 出 N 张系列广告图"走 A;如果是"修这张图 / PS 一下 / 改文案换头像 / 纯文字生一张"走 B。
+  通用图片生成 / 编辑 skill。支持 0 张图(text2im,generate 子命令)与 ≥1 张图(edit 子命令)。差异化:game-ad-imagegen (A) 专做游戏买量广告(多张系列 / 必 ≥1 图);本 skill (B) 做通用图片任务(单图修改 / 0 图文生图 / 任意题材 / 单张为主)。
   触发词:改这张图 / 修一下这张图 / PS 一下 / 改文案 / 换头像 / 改图 / 纯文字生图 / 文生图 / 通用图片生成 / 任意题材海报 / 头像生成 / 图标生成 / sprite / mockup / 透明背景图 / 编辑图片 / 单图修改 / 给我生成一张图。
-  Also: generate or edit raster images for non-game-ad visual tasks (photos, illustrations, textures, sprites, mockups, transparent-background cutouts, single-image edits, text-to-image). Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas.
+  Also: generate or edit raster images for non-game-ad tasks (photos, illustrations, textures, sprites, mockups, transparent cutouts, text-to-image). Do not use when task is better handled by editing existing SVG/vector/code-native assets or HTML/CSS/canvas.
 ---
 
 # Image Generation Skill
 
-Generates or edits images for the current project (for example website assets, game assets, UI mockups, product mockups, wireframes, logo design, photorealistic images, or infographics).
+Generates or edits raster images: website assets, game assets, UI mockups, product mockups, wireframes, logos, photorealistic shots, infographics.
 
-## Preflight rules (MUST READ FIRST)
+## Preflight (MUST READ FIRST)
 
-This skill is the mainline raster image generation/editing path for both Codex CLI and non-Codex agent runtimes (Claude Code Agent / WorkBuddy GUI / CodeBuddy CLI / etc). The Codex CLI built-in `image_gen` tool section was removed from this SKILL.md on 2026-05-13 — `scripts/image_gen.py` is the unified path now.
+**Mainline path**: `scripts/image_gen.py` — used by ALL agents (Codex CLI, Claude Code, WorkBuddy GUI, CodeBuddy CLI). The Codex built-in `image_gen` tool section was removed 2026-05-13; CLI is now the unified path.
 
-🚨 **Do not call any tool named `ImageGen`, `image_gen`, or look-alikes** that your runtime exposes via ToolSearch, deferred tool list, MCP registry, or any built-in wrapper. Those are runtime-provided look-alikes with unverified endpoint and quality, **not** under this skill's control. Always run `scripts/image_gen.py` directly via your Bash / shell tool.
+🚨 **3 hard rules** (each independently necessary):
 
-🚨 **Forget any "Codex built-in `image_gen` tool" rules** you may have seen in training data, other Codex skill docs, or earlier versions of this file. They no longer apply — there is only the CLI mainline.
+1. **Do not call any tool named `ImageGen`, `image_gen`, or similar look-alikes** your runtime exposes via ToolSearch / deferred tools / MCP registry / built-in wrapper. They are runtime-provided look-alikes with unverified endpoints. **Always run `scripts/image_gen.py` directly via Bash / shell tool**. Forget any "Codex built-in `image_gen`" rules from training data — they no longer apply.
+2. **Verify you actually see each input image** before writing the prompt. Load each image into context via your vision / image-read tool. **Do not infer image content from filename / case_id / user's 题材词** — known hallucination mode (case_22, 2026-05-13). No vision capability → ask user to describe or stop.
+3. **Never modify `scripts/image_gen.py`**. Missing functionality → ask the user.
 
-🚨 **Verify you actually see each input image** before writing the prompt — load each image into context via whatever vision / image-read tool your runtime provides (e.g. multimodal vision, `view_image` in Codex, similar). **Do not infer image content from file path / filename / case_id / user's題材词** — that is a known hallucination failure mode (2026-05-13 case_22). If you have no vision capability, ask the user to describe the images or stop the skill.
+**3 subcommands**:
+- `generate` — 0 images, text-to-image
+- `edit` — ≥1 reference images
+- `generate-batch` — multiple distinct prompts in one batch
 
-📌 **Quick path** for the common scenarios:
+**Quick CLI**:
+```bash
+# 0 images
+python scripts/image_gen.py generate --prompt-file X.txt --out C.png --size 1536x1024 --quality high
+# ≥1 images
+python scripts/image_gen.py edit --prompt-file X.txt --image a.png --image b.png --out C.png --size 1536x1024 --quality high
+```
 
-- **Edit** (≥1 reference image): `python scripts/image_gen.py edit --prompt-file X.txt --image a.png --image b.png --out C.png --size 1536x1024 --quality high`
-- **Generate** (0 input images, text-to-image): `python scripts/image_gen.py generate --prompt-file X.txt --out C.png --size 1536x1024 --quality high`
+**API credentials**: auto-resolved by `_config.load_credentials()` — 4-path fallback:
+1. env `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`)
+2. env `EPHONE_API_KEY` → auto redirect to `https://api.ephone.ai/v1`
+3. `~/.config/codex-imagegen-fork/config.toml` with `ephone_api_key = "..."`
+4. **RuntimeError "缺 API key"** → trigger First-time setup (see section below) — ask user once, write config.toml, do NOT fall back to runtime ImageGen wrappers.
 
-API credentials auto-resolved by `_config.load_credentials()` — env `OPENAI_API_KEY` → env `EPHONE_API_KEY` → `~/.config/codex-imagegen-fork/config.toml` → triggers First-time setup if all empty (see "First-time setup" section near end of file).
+**Default model**: `gpt-image-2`. Switch to `gpt-image-1.5` ONLY when user explicitly asks for native transparent output (`background=transparent`) — ASK before switching, since it's a quality downgrade.
 
-The rest of this SKILL.md is detailed reference — decision tree / prompt schema / use-case taxonomy / `gpt-image-2` parameters / T9-style game-ad template / Batch UX. Skip to whatever section you need.
+**Windows note**: Git Bash `echo $OPENAI_API_KEY` may return empty even when User-scope env is set. Don't trust bash `echo` — let `_config.load_credentials()` resolve credentials itself.
+
+**References**: `references/cli.md` (CLI examples), `references/image-api.md` (API params), `references/prompting.md` (prompting principles), `references/sample-prompts.md` (copy/paste recipes), `references/codex-network.md` (network/sandbox).
 
 ---
 
-## Mode
+## Two execution modes
 
-This skill runs `scripts/image_gen.py` as the mainline path for all agents (Codex CLI and non-Codex alike). The Codex CLI built-in `image_gen` tool section was removed 2026-05-13 — that path was unreachable for the non-Codex runtimes which are the推广 target (Claude Code Agent / WorkBuddy GUI / CodeBuddy CLI / etc). For Codex built-in historical docs, see `git log --before 2026-05-13` or the upstream OpenAI Codex skill samples.
+| Mode | When | Agent does |
+|---|---|---|
+| **Mode 1: Interactive** (Workflow below) | User gives **detailed prompt + (optional) image** in chat | Vision verify + write prompt + call image_gen.py |
+| **Mode 2: Form-driven** (Batch UX section) | User only stated **intent**, no detailed prompt (e.g. "我要批量出图") | Silently open form (port 8766), user fills self-serve, agent only executes |
 
-Three subcommands:
+**Routing precedence** (top-to-bottom, first match wins):
+1. User pasted `config.json` / said "跑 batch_<id>" → **Mode 2 trigger execute**
+2. User gave **detailed Chinese/English prompt + (optional) image** in chat → **Mode 1** (Workflow)
+3. User said only **intent** (e.g. "我要生图" / "做几张图" / "改图" with no specifics) → **Mode 2 open form**
 
-- `generate` — text-to-image, 0 input images
-- `edit` — image editing with 1+ reference image(s)
-- `generate-batch` — multiple distinct prompts in one batch job
-
-Mainline rules:
-
-- Always use `scripts/image_gen.py`. API credentials are resolved automatically by `_config.load_credentials()` — 4-path fallback (env `OPENAI_API_KEY` → env `EPHONE_API_KEY` → `~/.config/codex-imagegen-fork/config.toml` → RuntimeError triggering First-time setup; see "Non-Codex agent override" section for the full sequence).
-- **Never modify** `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
-- **Do not** call any runtime-discovered `ImageGen` / `image_gen` tool wrapper exposed via ToolSearch / deferred tools / MCP registry. Those are not under this skill's quality control — they may route to unverified endpoints. Always use `scripts/image_gen.py`.
-- Use `gpt-image-2` (the default in `scripts/image_gen.py`) unless the user explicitly requests `gpt-image-1.5` for native transparent output. `gpt-image-2` does not support `background=transparent`; if a request needs true transparency, ask before switching.
-
-References (apply to all agents):
-
-- `references/cli.md` — CLI usage examples
-- `references/image-api.md` — API parameter reference (sizes, quality, input_fidelity, masks, output format)
-- `references/codex-network.md` — network / sandbox notes
-- `references/prompting.md` — shared prompting principles
-- `references/sample-prompts.md` — copy/paste prompt recipes
+**Anti-bias**: trigger words like "改这张图" / "做一张图" appear in both Mode 1 and Mode 2 frontmatter triggers. The **detailed prompt presence** decides — has concrete content to feed image_gen? → Mode 1. Vague intent only? → Mode 2.
 
 ## When to use
 - Generate a new image (concept art, product shot, cover, website hero)
@@ -70,58 +73,49 @@ References (apply to all agents):
 - Making a small project-local asset edit when the source file already exists in an editable native format
 - Any task where the user clearly wants deterministic code-native output instead of a generated bitmap
 
-## Decision tree
+## Mode 1: Interactive Workflow
 
-Think about two separate questions:
+When the user gave a detailed prompt (and optionally images) in chat, run these **8 steps**:
 
-1. **Intent:** is this a new image or an edit of an existing image?
-2. **Execution strategy:** is this one asset or many assets/variants?
+### Step 1: Decide subcommand
+- **0 images** → `generate` (text-to-image)
+- **≥1 image, user wants to modify it preserving parts** → `edit` (most edit cases)
+- **≥1 image, user wants new image, image is only style/composition/mood reference** → `generate` (with refs as guidance)
+- **Many distinct prompts (different subjects)** → `generate-batch` with JSONL (do NOT use `--n` for distinct assets; `--n` is variants of ONE prompt)
 
-Intent:
-- If the user wants to modify an existing image while preserving parts of it, treat the request as **edit** (`scripts/image_gen.py edit`).
-- If the user provides images only as references for style, composition, mood, or subject guidance, treat the request as **generate** (`scripts/image_gen.py generate`).
-- If the user provides no images, treat the request as **generate**.
+### Step 2: Vision verify each input image (skip if 0 images)
+Load each image into context via your vision tool. Write a verbatim 1-2 sentence description of what you actually see (subject / palette / composition / any visible text). **Do NOT infer from filename / case_id / user's 题材词** — case_22 hallucination mode. No vision capability → ask user to describe or stop.
 
-Edit-mode notes:
-- Pass the image file paths directly to `--image` flags (multiple `--image` allowed for compositing / multi-reference scenes).
-- For edits, preserve invariants aggressively and save non-destructively (use `--out` to control output path, or `--force` to overwrite).
-- Use `--mask` when only a specific region should change (see `references/cli.md` for mask format).
+### Step 3: Label each image role
+- `reference image` (style / composition / mood guidance)
+- `edit target` (image to be modified)
+- `supporting insert` (compositing input)
 
-Execution strategy:
-- Single asset / few variants: one `scripts/image_gen.py generate` or `edit` call per requested image. Use `--n` for variants of one prompt.
-- Many distinct prompts (different subjects/scenes): use `scripts/image_gen.py generate-batch` with a JSONL of distinct prompts.
-- For many distinct assets, do not use `--n` as a substitute for separate prompts — `--n` is for variants of one prompt; distinct assets need distinct prompts.
+### Step 4: Collect explicit inputs
+- Verbatim quoted text (titles / CTAs / bubbles)
+- Constraints list (what MUST keep unchanged, for edits)
+- Avoid list (negative constraints)
+- Size / quality / model preferences
 
-Assume the user wants a new image unless they clearly ask to change an existing one.
+### Step 5: Apply prompt augmentation per Specificity policy
+- Specific & detailed prompt → **normalize only, no extra creative additions**
+- Generic prompt → tasteful augmentation only when it materially improves output (see Prompt augmentation section below)
+- For edits, **preserve invariants** aggressively and repeat them verbatim: `change ONLY X; keep Y unchanged`
 
-## Workflow
-1. Apply the "Environment detection" gate at the top of this document. All agents (Codex CLI or non-Codex) use `scripts/image_gen.py` as the mainline path.
-2. Decide the intent: `generate` or `edit`.
-3. Decide whether the output is preview-only or meant to be consumed by the current project.
-4. Decide the execution strategy: single CLI call vs `generate-batch` for many distinct prompts.
-5. Collect inputs up front: prompt(s), exact text (verbatim), constraints/avoid list, and any input images.
-6. For every input image, label its role explicitly:
-   - reference image (style / composition / mood guidance)
-   - edit target (image to be modified)
-   - supporting insert / compositing input
-7. 🚨 **Verify you actually see each input image** — before writing the prompt, load each image into your conversation context via whatever vision / image-read tool your runtime provides (e.g. multimodal vision, `view_image` in Codex, similar tools elsewhere). **Do not assume image content from file path / filename / case_id / user's題材词** — that is the known case_22 hallucination failure mode (2026-05-13). If you have no vision capability, ask the user to describe the images or stop the skill.
-8. If the user asked for a photo, illustration, sprite, product image, banner, or other explicitly raster-style asset, use this skill. If the request is for an icon, logo, or UI graphic that should match existing repo-native SVG/vector/code assets, prefer editing those directly instead.
-9. Augment the prompt based on specificity:
-   - If the user's prompt is already specific and detailed, normalize it into a clear spec without adding creative requirements.
-   - If the user's prompt is generic, add tasteful augmentation only when it materially improves output quality.
-10. Call `scripts/image_gen.py {generate|edit|generate-batch}` per the decisions above. **Do not** call any ToolSearch / deferred-tool / MCP-registry-discovered `ImageGen` / `image_gen` wrapper — those are runtime-provided look-alikes with unverified endpoints.
-11. For transparent-output requests, see "Transparent image requests" section below.
-12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
-13. Iterate with a single targeted change, then re-check.
-14. For preview-only work, render the image inline if your runtime supports inline rendering; otherwise keep the file at the saved path.
-15. For project-bound work, save under `output/imagegen/` or a path the user named, and update any consuming code or references.
-16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
-17. For CLI-specific controls (model, quality, `input_fidelity`, masks, output format, output paths, network setup) see `references/cli.md` and `references/image-api.md`.
-18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set.
+### Step 6: Call `scripts/image_gen.py {generate|edit|generate-batch}`
+Per Preflight rule 1, **do NOT** call any ToolSearch / MCP / deferred-tool `ImageGen` wrapper. For transparent output, see "Transparent image requests" section.
 
-## Rewrite-only mode (skip step 10, output prompt directly in chat)
+### Step 7: Validate output
+Check subject / style / composition / text accuracy / invariants. Iterate with a SINGLE targeted change at a time.
 
-If the user explicitly asks for "rewrite only / prompt only / 不出图 / 只转写 / 给我 prompt / 先看 prompt"-style triggers → run Workflow steps 1-9 (intent + vision + image labeling + augmentation) but **skip step 10** (the `image_gen.py` call). Instead, **output the rewritten prompt directly in the chat as a markdown fenced code block** so the user can copy it via the chat client's built-in "copy code" button (WorkBuddy / Claude Code / Codex CLI all surface one).
+### Step 8: Save + report
+- Preview-only → keep at saved path, render inline if runtime supports
+- Project-bound → save under `output/imagegen/` or user-named path, update consuming code
+- Report final saved path(s) + the final prompt(s) back to user
+
+## Rewrite-only mode (skip Step 6, output prompt directly in chat)
+
+If user says "rewrite only / prompt only / 不出图 / 只转写 / 给我 prompt / 先看 prompt" → run Workflow Steps 1-5 (subcommand + vision + label + collect + augment) but **skip Step 6** (the `image_gen.py` call). Output the rewritten prompt directly in chat as a markdown fenced code block so user can copy via chat client's built-in "copy code" button.
 
 **No image-gen credit consumed.** Use cases:
 - User wants to inspect the rewritten prompt before deciding whether to spend credit on a batch
@@ -146,7 +140,7 @@ If the user explicitly asks for "rewrite only / prompt only / 不出图 / 只转
 - One prompt per fence. If Workflow produced N prompts (multi-image batch), emit N separate fences, each preceded by a `### prompt for image #<i>` heading line.
 - **Never truncate**. Don't write `...` or "rest omitted" — output the full prompt every time.
 
-**Trigger phrases** (any → use this mode instead of step 10):
+**Trigger phrases** (any → use this mode instead of Step 6):
 - "只转写"、"只 rewrite"、"先 rewrite 看看"、"不要出图,给我 prompt"、"prompt 写好发我"
 - "rewrite only"、"prompt only"、"just the prompt"、"show me the prompt first"
 - "把 prompt 给我"、"prompt 复制给我"
@@ -405,26 +399,6 @@ Quality and style requirements:
 
 **Why T9 over 13-field**: cross-case investigation 2026-05-12 found that 13-field schema with inline Chinese verbatim works on `/v1/images/edits` (no L2 rewriter) when the L1 is strong (Claude Opus 4.7 / GPT-5+), but T9 style is more **robust across L1 capability tiers** — fewer text positions, simpler scene complexity, explicit "70/30" ratio all reduce image-model burden, making it the safer template for company推广 to weaker L1 (GLM, Hy3, etc.).
 
-### Non-Codex agent override (added 2026-05-12 for company use)
-
-This section is a backstop reminder for non-Codex agent runtimes (Claude Code Agent, WorkBuddy GUI, CodeBuddy CLI, any third-party agent). The mainline path is `scripts/image_gen.py` for all agents — this section spells out the mandatory rules to prevent fallback to runtime-provided ImageGen wrappers. See also "Preflight rules" at the top of this document.
-
-**Mandatory rules for non-Codex runtimes**:
-
-1. **Do not** call any tool named `ImageGen`, `image_gen`, or similar that your runtime exposes via ToolSearch, deferred tool list, MCP registry, or built-in wrapper. Those are runtime-provided look-alikes, not the Codex built-in this SKILL.md is written for. Their output endpoint and quality are not under this skill's control.
-2. **Do** run `scripts/image_gen.py {generate|edit|generate-batch}` per the standard fallback docs above. This is the only path with verified quality (see project recipe lock).
-3. **API key resolution is automated since 2026-05-13** — `scripts/image_gen.py` calls `_config.load_credentials()` which tries 4 paths in order:
-   - `OPENAI_API_KEY` env (+ optional `OPENAI_BASE_URL`)
-   - `EPHONE_API_KEY` env → auto redirect to `https://api.ephone.ai/v1`
-   - `~/.config/codex-imagegen-fork/config.toml` with `ephone_api_key = "..."`
-   - **RuntimeError** → trigger First-time setup section below
-
-   **You no longer need to manually set env vars** before running the script. Just invoke `python scripts/image_gen.py edit ...` directly.
-
-4. **If the script raises "缺 API key" / "No API key found" error**, do not silently fall back to any runtime ImageGen wrapper. Trigger "First-time setup" section below to ask the user for their key and write the config.toml.
-5. **Do not pause to ask the user about mode choice** — non-Codex runtime means CLI is mandatory.
-6. **Windows note**: in Git Bash subshells, `echo $OPENAI_API_KEY` may return empty even when the variable is set at User-scope (Git Bash does not inherit Windows User-scope env vars). Do **not** trust bash `echo` results; instead, just let `scripts/image_gen.py` resolve credentials itself (Python `os.environ` reads from the parent process env block correctly).
-
 ### First-time setup (zero-config recruit path) — 2026-05-13 added
 
 If `scripts/image_gen.py` errors with `RuntimeError: 缺 API key` / `No API key found`, the user has no key configured yet. **You (the agent) MUST do these steps**:
@@ -447,7 +421,7 @@ If `scripts/image_gen.py` errors with `RuntimeError: 缺 API key` / `No API key 
 - API parameter quick reference: `references/image-api.md`
 - Network approvals / sandbox settings for CLI mode: `references/codex-network.md`
 
-## Batch UX (HTML 表单触发模式) — added 2026-05-13
+## Mode 2: Batch UX (HTML 表单触发模式) — added 2026-05-13
 
 本 skill **自包含**一套批量 HTML 表单 + runner,供设计师跑多任务时用。**本表单专属本 skill,生成的 config.json 写死 `skill: "b"`,runner 也只跑本 skill。** A skill (`game-ad-imagegen`) 有自己独立的一套 web/ + batch_runner.py,本 skill 不知道也不调度它。
 
@@ -473,16 +447,23 @@ runner 内用 `Path(__file__).resolve().parent` anchor 自动定位本 skill 的
 
 **user 在对话区说以下任意一种,agent 都唤起 form**(不管 n=1 单图还是 n=N 批量):
 
-| 用户话术(中文/英文,意图任意一种) | agent 行为 |
-|---|---|
-| "我要生图" / "做一张图" / "做几张图" / "出图" | 唤起 form |
-| "改这张图" / "修一下这张图" / "PS 一下" / "改文案" / "换头像" | 唤起 form |
-| "我要纯文字生图" / "文生图" / "给我生成一张图" | 唤起 form |
-| "我要批量出图(用 B)" / "打开 B 的批量表单" | 唤起 form |
-| "做个海报 / 头像 / 图标 / sprite / mockup" | 唤起 form |
-| "用 B skill 出图" / "用 codex-imagegen-fork 跑" | 唤起 form |
+🚨 **路由优先级**(对齐顶部"Two execution modes"):
 
-> form 顶部 n 字段默认 = 1(单图模式),user 想批量改 n 即可。**form 既是单图也是批量入口,既支持 0 图 text2im 也支持 ≥1 图 edit。**
+**Mode 1 优先**: 用户**已在对话区给详细 prompt + (可选)图**(详细 = 有具体可喂给 image model 的中文/英文字面) → 走 Mode 1 Workflow,**不**唤起 form。即使话术命中下方表,只要 prompt 已详细给出,Mode 1 优先。
+
+**Mode 2 触发**: 用户**只说意图、没给详细 prompt**,或**明确说要 form / batch** 时唤起:
+
+| 用户话术 | agent 行为 |
+|---|---|
+| "我要批量出图" / "打开批量表单" / "开始跑批" / "跑 batch" | **唤起 form** (明确 form/batch) |
+| "我要生图" / "出图" / "改图"(**没给 prompt 也没给图**) | **唤起 form** (无 prompt → self-serve) |
+| "做一张图" / "做几张图"(**只说意图**) | **唤起 form** |
+| "用 B skill 出图" / "用 codex-imagegen-fork 跑" | **唤起 form** |
+| "做个海报 X,主题 Y,style Z"(**给了详细 prompt**) | **走 Mode 1**,不唤起 form |
+| "改这张图(附图),把 X 改成 Y,其他不动"(**给了详细 prompt + 图**) | **走 Mode 1**,不唤起 form |
+
+> form 顶部 n 字段默认 = 1,user 想批量改 n 即可。**form 既是单图也是批量入口,既支持 0 图 text2im 也支持 ≥1 图 edit。**
+> **决策**:用户话里有可直接喂给 image model 的 prompt 字面?有 → Mode 1;没有(只有意图) → Mode 2。
 
 **agent 不要让 user 自己开 terminal / 自己点 URL**。下面按优先级试:
 

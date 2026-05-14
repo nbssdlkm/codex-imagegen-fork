@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "prompt": "给我生成一张图:一只穿着汉服的橘猫,坐在江南水乡的石桥上,水墨风格,1024x1024。",
+    "expected": "0 张图 → generate 子命令,不是 edit / 不是 batch。Workflow Step 6 image labeling 应该 skip (没图)。Step 7 vision verify 应该 skip (没图)。直接调 image_gen.py generate --prompt-file ... --size 1024x1024。",
+    "scenario": "text-to-image (generate subcommand)"
+  },
+  {
+    "id": 2,
+    "prompt": "把这张图(给一张产品图)的背景换成黄昏的橙色渐变,主体的猫保持不变,其他元素不要动。",
+    "expected": "≥1 张图 → edit 子命令。先 Step 7 vision verify 真看图。prompt 必含 invariants: 'change only background, keep cat unchanged'。Step 13 single-change iteration 心智。 调 image_gen.py edit --image <user_image> --prompt-file ...。",
+    "scenario": "edit with invariants (precise-object-edit)"
+  },
+  {
+    "id": 3,
+    "prompt": "我要批量出图",
+    "expected": "Batch UX 触发,起 port 8766 (B skill 端口) + webbrowser.open。绝对不二次确认。对话区一条简短通知,不主动 ping。",
+    "scenario": "batch UX trigger (port 8766)"
+  }
+]

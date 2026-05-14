@@ -1,0 +1,44 @@
+# Regression checkpoints for codex-imagegen-fork SKILL.md
+# 每条都是"必须保留"的 invariant。改完后 Grep verify;任一丢失 → revert。
+# 格式: <id>|<pattern - regex or literal>|<rationale>
+
+CP01|Do not call any tool named `ImageGen`|Preflight rule 1: 不调 runtime-provided 假 ImageGen
+CP02|scripts/image_gen\.py|主路径 CLI 必须显式存在
+CP03|Verify you actually see each input image|强制 vision verify 防 case_22 hallucination
+CP04|case_22|历史 hallucination 失败 case
+CP05|generate|generate 子命令(0 图 text2im)
+CP06|edit|edit 子命令(≥1 图编辑)
+CP07|generate-batch|batch 子命令
+CP08|gpt-image-2|默认 model
+CP09|gpt-image-1\.5|transparent 备选 model
+CP10|background=transparent|gpt-image-2 不支持 transparent 的关键事实
+CP11|_config\.load_credentials|API key 4-path resolution
+CP12|EPHONE_API_KEY|env var 名
+CP13|OPENAI_API_KEY|env var 名
+CP14|config\.toml|first-time setup 写入路径
+CP15|First-time setup|零配置 wizard 必走
+CP16|chroma-key|transparent 备选 path 关键概念
+CP17|#00ff00|chroma key color 字面值
+CP18|13-field schema|prompt 结构提及
+CP19|T9-style|game-ad 模板提及
+CP20|70% faithful|prompt 约束比例
+CP21|game-ad-imagegen|A skill 差异化引用
+CP22|skill: "b"|batch UX form 写死的 skill 标识
+CP23|8766|B skill 专属端口
+CP24|launch_detached\.py|detach launcher 必走
+CP25|DETACHED\+BREAKAWAY|host 杀进程解法
+CP26|不要二次确认|Batch UX UX 原则
+CP27|result_grid|跑批前唤起进度页
+CP28|webbrowser\.open|跨 OS 浏览器调用
+CP29|http\.server 8766|Batch UX HTTP server 启动
+CP30|rewrite only|Rewrite-only mode trigger
+CP31|prompt only|Rewrite-only mode trigger 英文
+CP32|preserve invariants|edit mode 核心原则
+CP33|verbatim|verbatim Chinese / quoted text 关键约束
+CP34|--no-augment|batch UX 终稿模式 flag
+CP35|references/cli\.md|reference 文件链接
+CP36|references/prompting\.md|reference 文件链接
+CP37|Specificity policy|prompt augmentation 关键 section
+CP38|Use-case taxonomy|分类 schema
+CP39|gpt-image-1\.5|transparent native alpha 备选
+CP40|`generate-batch`|batch subcommand reference
