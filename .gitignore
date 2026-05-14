@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+.vscode/
+
+outputs/
+
+config.toml
+.config/
+
+batch_*.json
+
+# launch_detached.py 在 scripts/ 内 append 写的 batch_runner log
+scripts/*_detached_launcher.log

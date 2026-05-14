@@ -1,0 +1,15 @@
+{
+  "batch_id": "fixture_good_text2im",
+  "skill": "b",
+  "out_dir": "~/Desktop/imagegen-out/fixture_good_text2im/",
+  "size": "1536x1024",
+  "quality": "medium",
+  "tasks": [
+    {
+      "task_id": "t01",
+      "reference_images": [],
+      "prompt": "Photograph of a calm mountain lake at sunrise, mist on water, warm golden light, no text",
+      "n": 1
+    }
+  ]
+}
