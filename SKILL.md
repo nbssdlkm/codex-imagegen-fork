@@ -532,6 +532,30 @@ agent 发一条简短消息:
 - ❌ **不要** 改 `reference_images` 顺序: 顺序对应用户 prompt 里"图1/图2/图3",照用户排的传给 rewrite_prompt。
 - ❌ **不要** 主动给 `config.tasks[].prompt` 加修饰词或英文化: 用户填的中文需求传给 rewrite_prompt,LM 自己 rewrite。
 - ❌ **不要** 主动开多个 batch 并发跑同 task: token 翻倍且无质量提升。
+- ❌ **不要** 主动重发触发短语 / 重启 batch_runner: 1 个 config 对应 1 个进程,重启会让多进程同写文件 race。
+
+---
+
+### Anchor workflow (task 设 `anchor_candidates ≥ 2` 时自动启用)
+
+**目的**: 镜像网页版 ChatGPT first-image-anchor 机制,解决标准模式抽卡 + N 张风格漂。先出 M 候选 → user 挑 1 张作 anchor → anchor 喂回 ref 跑剩余 N-1 张系列风格统一。
+
+**触发**: config.json 内 task 设 `"anchor_candidates": M` (2 ≤ M ≤ 10) **且** `n ≥ 2` **且 refs ≥ 1**(B 的 0 图 text2im 不支持 anchor)。
+
+**三阶段流程** (batch_runner 自动跑,跟标准模式自动分支):
+
+```
+Phase 1: 同段 prompt × M sampling → M 张候选,写 anchor_pick.html + 改 status="awaiting_picks"
+Phase 2: poll `{batch_id}_anchor_picks.json` (30s/round, timeout 30min);user 浏览器挑 → 保存 JSON 到 out_dir
+Phase 3: copied picked → `{task_id}_01.png` + rewrite N-1 段 anchor-locked → 跑 N-1 张 series
+```
+
+**🚨 Phase 2 — agent 绝对不能代办**:
+
+agent 看到 `_batch_meta.json` 内 `status="awaiting_picks"` = 等用户挑选的标志,不是卡死。
+
+- ✅ 通知 user 去浏览器打开 `anchor_pick.html` 挑选,picks JSON 应保存到 `<out_dir>/<batch_id>_anchor_picks.json`
+- ❌ **绝对不要 agent 自己写 picks JSON** — anchor pick 必须 user 决定(审美 + 业务判断,LLM 评不出"最满意的那张")。agent 代办 = 完全失去 anchor workflow 的意义。
 
 ### 失败时的 fallback
 

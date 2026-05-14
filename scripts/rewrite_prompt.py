@@ -134,8 +134,13 @@ def _strip_fence(text: str) -> str:
     return text
 
 
-def rewrite(user_prompt: str, reference_images, n: int = 1, model: str = None, verbose: bool = False) -> list:
-    """vision + rewrite。返回 list[str] of length n。详见模块 docstring。"""
+def rewrite(user_prompt: str, reference_images, n: int = 1, model: str = None, verbose: bool = False, anchor_phase: str = None, anchor_idx: int = None) -> list:
+    """vision + rewrite。返回 list[str] of length n。
+
+    anchor_phase: None (默认) / "phase1" (anchor 候选模式) / "phase3" (anchor 锁风格)
+    anchor_idx: phase3 时 caller 指定 refs 列表中哪张是 picked anchor (1-based);
+                None 时默认最后一张
+    """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")
 
@@ -157,6 +162,33 @@ def rewrite(user_prompt: str, reference_images, n: int = 1, model: str = None, v
         )
     else:
         user_text += f"\n\n[runner instruction] Produce 1 prompt (single output image)."
+
+    # Anchor workflow Phase 3: caller 指定 anchor_idx (或默认最后一张) — caller 必须保证该 idx 处是 picked anchor
+    if anchor_phase == "phase3" and len(ref_paths) >= 1:
+        if anchor_idx is None:
+            anchor_idx = len(ref_paths)
+        if anchor_idx < 1 or anchor_idx > len(ref_paths):
+            raise ValueError(f"anchor_idx={anchor_idx} 超出 refs 范围 1..{len(ref_paths)}")
+        user_text += (
+            f"\n\n[ANCHOR LOCK MODE — Phase 3] Image {anchor_idx} (out of {len(ref_paths)} ref images) is the "
+            f"user-picked **anchor image** from a Phase 1 candidate round. It represents the LOCKED "
+            f"visual style for this entire series — rendering technique, color palette, lighting, UI "
+            f"layout, typography, composition language. Your {n} prompts MUST visually echo Image "
+            f"{anchor_idx}'s style very tightly (**~85% faithful to anchor instead of the usual 70%**) "
+            f"— only the primary subject identity / pose / sidekick may vary across prompts. "
+            f"All other reference images (not Image {anchor_idx}) provide subject source material as before. "
+            f"In each prompt, **explicitly write** at the end: "
+            f"`Strictly match Image {anchor_idx}'s rendering style, palette, UI plate styling, and typography.` "
+            f"The final output series (picked anchor + {n} new images) should look like one coherent "
+            f"set, not {n+1} unrelated images."
+        )
+    elif anchor_phase == "phase1":
+        user_text += (
+            f"\n\n[ANCHOR CANDIDATE MODE — Phase 1] This prompt will be used to generate M candidate "
+            f"variants (same prompt × M sampling), letting the user pick the best one as anchor for "
+            f"a subsequent Phase 3 series. Write a single well-crafted prompt with concrete subject "
+            f"choice (don't artificially leave it vague — sampling will provide pose/detail variety)."
+        )
 
     user_content = image_contents + [{"type": "text", "text": user_text}]
 
