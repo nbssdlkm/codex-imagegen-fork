@@ -103,7 +103,7 @@ Load each image into context via your vision tool. Write a verbatim 1-2 sentence
 - For edits, **preserve invariants** aggressively and repeat them verbatim: `change ONLY X; keep Y unchanged`
 
 ### Step 6: Call `scripts/image_gen.py {generate|edit|generate-batch}`
-Per Preflight rule 1, **do NOT** call any ToolSearch / MCP / deferred-tool `ImageGen` wrapper. For transparent output, see "Transparent image requests" section.
+(Preflight rule 1 applies — direct CLI only.) For transparent output, see "Transparent image requests" section.
 
 ### Step 7: Validate output
 Check subject / style / composition / text accuracy / invariants. Iterate with a SINGLE targeted change at a time.
@@ -356,48 +356,11 @@ Manual paths (only mention if user explicitly asks):
 
 If installation is not possible in this environment, tell the user which dependency is missing and how to install it into their active environment.
 
-### Game-ad prompt template (T9 style — added 2026-05-12 for Chinese-text-heavy assets)
+### Game-ad detour: use A skill instead
 
-For game ads / posters / illustrations with **multiple Chinese text positions** (titles, CTAs, speech bubbles, stamps), the default 13-field schema in `references/prompting.md` and `sample-prompts.md` is **not optimal** — those samples target dev-utility scenes (SaaS dashboards, product mockups, scientific diagrams), and produce that aesthetic when applied to game ads.
+For **game ad / 买量素材 / 多张系列爆款复刻**, prefer the sibling skill `game-ad-imagegen` — it has a specialized 6-step vision workflow + T9-style prompt template + Batch UX dedicated to game-ad design. This (B) skill's prompt augmentation (Shared schema, 13-field) targets generic raster tasks (SaaS dashboards / product mockups / scientific diagrams) and produces that aesthetic when applied to game ads.
 
-Use this **T9-style template** for game-ad / illustration-story / commercial-game-asset scenes (cross-validated 2026-05-12 on 3 cases — recipe doc in developer's local workspace, not bundled with skill):
-
-```
-Create a polished {orientation} {asset type} in {WxH}, aspect ratio {ratio}.
-Use Image A as primary style/UI reference: {describe Image A elements}.
-Use Image B/C as character source sheets: {describe character sources}.
-
-Design a brand-new composition echoing Image A's visual language while
-adapting to {orientation/ratio}. Keep about 70% faithful to reference, 30% creative.
-
-Main content requirements:
-- {Central hero: visual description + pose}
-- {Background/scene: atmosphere + props + color palette}
-- Large stylized title at top in {style}: "{CHINESE_TITLE}".
-- Main promotional banner: "{CHINESE_MAIN_TEXT}".
-- {Optional speech bubble near hero}: "{CHINESE_BUBBLE}".
-- {Optional small inset/stamp/tag}: "{CHINESE_SIDE}".
-
-Quality and style requirements:
-- No raw screenshot artifacts (no phone UI / vConsole / FPS / watermarks).
-- Polished commercial-quality finish, {style-specific finish}.
-- {Orientation} composition only, {WxH}.
-- All Chinese text rendered crisply and readably DIRECTLY in the image.
-- Do NOT leave any text container blank.
-- Do NOT use placeholder pseudo-Chinese.
-- Do NOT use English subtitles (unless explicitly requested).
-```
-
-**Key T9-style constraints** (different from default 13-field schema):
-1. **Single hero focus** — 1 main subject + ≤2 supporting (inset / sidekick / reaction). Do NOT stack multi-panel multi-scene.
-2. **4-7 explicit Chinese text positions** — fewer than 3 looks empty, more than 7 dilutes image-model text precision.
-3. **Quote Chinese text verbatim**: write the literal target Chinese characters in double-quotes (e.g. `Large stylized title at top: "群雄之巅"` or whatever the actual title is for this asset) — not an English description like `"the calligraphy title"`. The image model renders the quoted string as-is, character by character, so verbatim Chinese is required.
-4. **Explicit "70% faithful 30% creative"** ratio in the prompt body.
-5. **Bullet list** for main content (NOT 13-field schema, NOT 草图编号 1)-N) Chinese prose).
-
-**Reference**: the template above is distilled from a 2229-char production English prompt verified 0-typo across 3 cases via `/v1/images/edits` endpoint. No external file lookup needed — the structure here is self-contained.
-
-**Why T9 over 13-field**: cross-case investigation 2026-05-12 found that 13-field schema with inline Chinese verbatim works on `/v1/images/edits` (no L2 rewriter) when the L1 is strong (Claude Opus 4.7 / GPT-5+), but T9 style is more **robust across L1 capability tiers** — fewer text positions, simpler scene complexity, explicit "70/30" ratio all reduce image-model burden, making it the safer template for company推广 to weaker L1 (GLM, Hy3, etc.).
+If you must do game-ad in B (rare, e.g. designer mixed asset types in one batch), use a **T9-style minimal prompt** instead of the 13-field schema: single hero focus, 4-7 verbatim-quoted Chinese text positions, explicit `Keep about 70% faithful, 30% creative`, bullet-list main content. Full T9 template + rationale lives in A skill's Step 4 范本 section.
 
 ### First-time setup (zero-config recruit path) — 2026-05-13 added
 
