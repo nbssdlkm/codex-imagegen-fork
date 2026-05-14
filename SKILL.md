@@ -388,7 +388,7 @@ If `scripts/image_gen.py` errors with `RuntimeError: 缺 API key` / `No API key 
 
 本 skill **自包含**一套批量 HTML 表单 + runner,供设计师跑多任务时用。**本表单专属本 skill,生成的 config.json 写死 `skill: "b"`,runner 也只跑本 skill。** A skill (`game-ad-imagegen`) 有自己独立的一套 web/ + batch_runner.py,本 skill 不知道也不调度它。
 
-**这条路径绕开"Workflow / Decision tree / Prompt augmentation"等流程**(用户已在表单里手填中文 prompt + 直接给图路径),agent 只做执行器。
+~~这条路径绕开 "Workflow / Decision tree / Prompt augmentation" 等流程~~ → **2026-05-14 已对齐(commit `7a659f2` + `f499d7c`)**: `batch_runner` 自带 vision + rewrite step(调 `scripts/rewrite_prompt.py`)跟 Mode 1 capability 对齐。用户在表单里写中文需求即可,**不需要预先 rewrite**;agent 仍只做执行器(开 form / 喂 config / 报告进度),LM rewrite 由 runner subprocess 自动跑。
 
 **关键文件位置**(都在本 skill 内,跟 SKILL.md 同根):
 
@@ -510,7 +510,7 @@ agent 发一条简短消息:
 - **0 张图** (text2im 纯文字生图): `python image_gen.py generate --prompt-file X --out C --size S --quality Q --no-augment --force`
 - **≥1 张图** (edit): `python image_gen.py edit --prompt-file X --image A --image B --out C --size S --quality Q --no-augment --force`
 
-`--no-augment` = batch UX 终稿模式,不让 image_gen 给 prompt 加 13 字段 schema augmentation(用户在表单里写的就是终稿)。
+`--no-augment` = 不让 image_gen 自己再加 13 字段 schema augmentation。**注**: 2026-05-14 之后 `batch_runner` 已在 image_gen 前跑了 vision + rewrite step,rewrite 输出的英文 prompt 已通过 system prompt 教 LLM 遵守 quality 规则;再在 image_gen 前 augment 一次会双重灌指令、稀释 prompt budget,故 batch UX 仍传 `--no-augment`(由 rewrite layer 接管 augmentation 职责)。
 
 ### B skill 在 Batch UX 模式下的特点
 
@@ -518,13 +518,20 @@ agent 发一条简短消息:
 - 子命令 `generate` / `edit` 自动二选一,由 `reference_images` 数量决定。
 - 1-N 张图都走 `edit`,顺序对应用户 prompt 里"图1/图2/..."。
 
-### Batch UX 模式下要明确**不做**的事
+### Batch UX 模式下 agent 的边界(2026-05-14 重写,跟 scripts/ 对齐)
 
-- ❌ **不要** 走 Workflow / Decision tree / Prompt augmentation:用户已在表单里手填中文 prompt,原样跑就行。
-- ❌ **不要** 自己写 13 字段 schema 包装:batch_runner 已加 `--no-augment`。
-- ❌ **不要** 试 ToolSearch / 任何 runtime-provided ImageGen wrapper:batch UX 永远走 `scripts/image_gen.py`,跟 Preflight 段同样原则。
-- ❌ **不要** 改 reference_images 顺序:顺序对应用户 prompt 里"图1/图2/图3"。
-- ❌ **不要** 主动给 prompt 加修饰词或英文化:表单 JSON 里的中文 prompt 原样传入。
+**✅ batch_runner 自动做的事**(agent 不要重复):
+
+- ✅ Per-task vision + rewrite: `batch_runner` 调 `scripts/rewrite_prompt.py` 对每个 task 跑 vision + LM rewrite,把用户需求转成 N 段(N=task.n)英文 image-gen prompt。**agent 不要自己再 rewrite 一遍 / 不要在 config 里塞预 rewrite 好的英文 prompt**(除非 task 显式标 `prompt_already_rewritten: true`)。0 refs 时跳过 rewrite(text2im,无图可 vision)。
+- ✅ N 段不同主体: `rewrite_prompt` 一次产 N 段独立 prompt,N>1 时每段 feature 不同主体(系列多样性)。**agent 不要假设"5 张同 prompt 跑 5 次 sampling"**。
+- ✅ No 13-field schema double-augmentation: `batch_runner` 调 `image_gen.py` 时传 `--no-augment`,因为 rewrite layer 已经在 system prompt 里指导 LLM 写好 prompt 字段。
+
+**❌ agent 仍不要做的事**:
+
+- ❌ **不要** 试 ToolSearch / 任何 runtime-provided ImageGen wrapper: batch UX 永远走 `scripts/image_gen.py`,跟 Preflight 段同样原则。
+- ❌ **不要** 改 `reference_images` 顺序: 顺序对应用户 prompt 里"图1/图2/图3",照用户排的传给 rewrite_prompt。
+- ❌ **不要** 主动给 `config.tasks[].prompt` 加修饰词或英文化: 用户填的中文需求传给 rewrite_prompt,LM 自己 rewrite。
+- ❌ **不要** 主动开多个 batch 并发跑同 task: token 翻倍且无质量提升。
 
 ### 失败时的 fallback
 
