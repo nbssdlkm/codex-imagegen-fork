@@ -119,6 +119,38 @@ Assume the user wants a new image unless they clearly ask to change an existing 
 17. For CLI-specific controls (model, quality, `input_fidelity`, masks, output format, output paths, network setup) see `references/cli.md` and `references/image-api.md`.
 18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set.
 
+## Rewrite-only mode (skip step 10, output prompt directly in chat)
+
+If the user explicitly asks for "rewrite only / prompt only / 不出图 / 只转写 / 给我 prompt / 先看 prompt"-style triggers → run Workflow steps 1-9 (intent + vision + image labeling + augmentation) but **skip step 10** (the `image_gen.py` call). Instead, **output the rewritten prompt directly in the chat as a markdown fenced code block** so the user can copy it via the chat client's built-in "copy code" button (WorkBuddy / Claude Code / Codex CLI all surface one).
+
+**No image-gen credit consumed.** Use cases:
+- User wants to inspect the rewritten prompt before deciding whether to spend credit on a batch
+- User wants the prompt for another tool (different image API, notes, manual iteration)
+- Debugging / human-in-the-loop: user edits the prompt then pastes back to `batch_form.html`
+
+**Output format** (type this directly into the chat — no scripts, no browser, no HTML files):
+
+````markdown
+转写好了。以下是 rewritten prompt(对话框「复制」按钮一键复制):
+
+```text
+<full rewritten prompt verbatim — no extra prefix / commentary / truncation inside the fence>
+```
+
+要真出图,把这段粘到 batch_form 的「中文需求 prompt」框 + 配上参考图。
+````
+
+**Invariants**:
+- Use ` ```text ` fence (not ` ```json ` / ` ```bash `) so chat clients don't treat it as runnable code.
+- Inside the fence, put **only the prompt text**. No `Step 4 output:` prefix, no commentary, no decoration.
+- One prompt per fence. If Workflow produced N prompts (multi-image batch), emit N separate fences, each preceded by a `### prompt for image #<i>` heading line.
+- **Never truncate**. Don't write `...` or "rest omitted" — output the full prompt every time.
+
+**Trigger phrases** (any → use this mode instead of step 10):
+- "只转写"、"只 rewrite"、"先 rewrite 看看"、"不要出图,给我 prompt"、"prompt 写好发我"
+- "rewrite only"、"prompt only"、"just the prompt"、"show me the prompt first"
+- "把 prompt 给我"、"prompt 复制给我"
+
 ## Transparent image requests
 
 If the user asks for a transparent-background image, use `gpt-image-1.5` (CLI mode supports it natively):
