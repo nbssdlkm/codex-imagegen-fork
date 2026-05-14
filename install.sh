@@ -36,7 +36,12 @@ echo ""
 echo "==> Verifying dependencies"
 PY="$(command -v python3 || command -v python)"
 if [ -z "$PY" ]; then
-  echo "    ! Python not found"; exit 1
+  echo "    ! Python not found. Install Python 3.10+ then re-run ./install.sh"
+  echo "      macOS:        brew install python@3.12   (or: https://www.python.org/downloads/)"
+  echo "      Ubuntu/Debian: sudo apt install python3 python3-pip"
+  echo "      Fedora/RHEL:   sudo dnf install python3 python3-pip"
+  echo "      Arch:          sudo pacman -S python python-pip"
+  exit 1
 fi
 echo "    Python: $($PY --version 2>&1)"
 if ! $PY -c "import openai" >/dev/null 2>&1; then

@@ -45,8 +45,22 @@ if (Test-Path $WbSkills) {
 Write-Host ""
 Write-Host "==> Verifying dependencies" -ForegroundColor Cyan
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-  Write-Host "    ! Python not found. Install Python 3.10+" -ForegroundColor Red
-  exit 1
+  Write-Host "    Python not found — attempting auto-install via winget..." -ForegroundColor Yellow
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Write-Host "    ! winget not available either. Install Python 3.10+ manually:" -ForegroundColor Red
+    Write-Host "      Option 1: https://www.python.org/downloads/  (download installer, check 'Add to PATH')"
+    Write-Host "      Option 2: Open Microsoft Store, search 'Python 3.12', install"
+    Write-Host "      Then close PowerShell, reopen, and re-run .\install.ps1"
+    exit 1
+  }
+  winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "    ! winget install failed. Install Python 3.10+ manually from https://www.python.org/downloads/" -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "    Python installed via winget." -ForegroundColor Green
+  Write-Host "    ⚠ Close this PowerShell window, open a new one, then re-run .\install.ps1" -ForegroundColor Yellow
+  exit 0
 }
 Write-Host "    Python: $(python --version 2>&1)"
 $openai = python -c "import openai; print(openai.__version__)" 2>&1
