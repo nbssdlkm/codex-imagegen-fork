@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Fallback CLI for explicit image generation or editing with GPT Image models.
+"""CLI for image generation / editing via GPT Image models (gpt-image-2 default).
 
-Used only when the user explicitly opts into CLI fallback mode, or when explicit
-transparent output requires the `gpt-image-1.5` fallback path.
+Invariant-gated: every prompt MUST originate from `rewrite_prompt.py` — the entry
+point (`_augment_prompt_fields`) verifies the SENTINEL marker and CJK ratio before
+allowing the prompt to reach the OpenAI image API. Bypassing the gate (missing
+marker, raw Chinese, etc.) is refused with a hard error. See `_assert_and_strip_sentinel`
+and `_assert_prompt_is_rewritten` near the top of this file.
 
 Defaults to gpt-image-2 and a structured prompt augmentation workflow.
 """
@@ -47,6 +50,47 @@ GPT_IMAGE_2_MAX_RATIO = 3.0
 
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_JOBS = 500
+
+
+# Must match SENTINEL in rewrite_prompt.py — proof-of-origin marker that the prompt
+# was produced by rewrite_prompt.py rather than typed by an agent / pasted by user.
+SENTINEL = "# REWRITTEN-V1"
+
+
+def _assert_and_strip_sentinel(prompt: str) -> str:
+    """Hard rail #1 (strong invariant): the prompt MUST start with SENTINEL marker,
+    proving it came from rewrite_prompt.py. Missing marker → caller didn't rewrite
+    (agent偷懒手写 / 用户直接粘贴 / 拼音蒙混 / 任何其他来源) → raise. After
+    verification, strip the marker line so it does not leak into the image API."""
+    stripped = prompt.lstrip()
+    if not stripped.startswith(SENTINEL):
+        raise SystemExit(
+            f"Error: prompt invariant violation: missing sentinel marker {SENTINEL!r} "
+            f"on first non-blank line. Every prompt sent to the image API MUST be "
+            f"produced by rewrite_prompt.py (which prepends this marker). first 200 "
+            f"chars: {prompt[:200]!r}"
+        )
+    nl = stripped.find('\n')
+    if nl == -1:
+        return ""
+    return stripped[nl + 1:]
+
+
+def _assert_prompt_is_rewritten(prompt: str) -> None:
+    """Hard rail: 进 image API 的 prompt 必须是 rewrite_prompt.py 产出的英文版本。
+    raw 中文 user prompt 直接进 gpt-image-2 会塌。rewritten prompt 里 verbatim text
+    positions 用 quote 包,CJK 占比远低于 10%。"""
+    cjk = sum(1 for c in prompt if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
+    if cjk == 0:
+        return
+    total = sum(1 for c in prompt if not c.isspace())
+    if total == 0 or cjk / total <= 0.10:
+        return
+    raise SystemExit(
+        f"Error: prompt invariant violation: {cjk} CJK chars / {total} non-ws "
+        f"({cjk/total:.0%}); refusing raw Chinese prompt at image API. Caller must "
+        f"pre-rewrite via rewrite_prompt.py. first 200 chars: {prompt[:200]!r}"
+    )
 
 
 def _die(message: str, code: int = 1) -> None:
@@ -277,6 +321,8 @@ def _augment_prompt(args: argparse.Namespace, prompt: str) -> str:
 
 
 def _augment_prompt_fields(augment: bool, prompt: str, fields: Dict[str, Optional[str]]) -> str:
+    prompt = _assert_and_strip_sentinel(prompt)
+    _assert_prompt_is_rewritten(prompt)
     if not augment:
         return prompt
 
@@ -986,7 +1032,7 @@ def _add_shared_args(parser: argparse.ArgumentParser) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fallback CLI for explicit image generation or editing via GPT Image models"
+        description="CLI for image generation / editing via GPT Image models (invariant-gated: prompt must come from rewrite_prompt.py)"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

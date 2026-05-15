@@ -10,6 +10,27 @@ description: |
 
 Generates or edits raster images: website assets, game assets, UI mockups, product mockups, wireframes, logos, photorealistic shots, infographics.
 
+## 🚨 Hard Invariant — Prompt Provenance (READ FIRST)
+
+**Every prompt sent to the image API MUST originate from `scripts/rewrite_prompt.py`. No bypass exists.** Without this guarantee, output quality regresses to the Chinese-prompt hallucination mode and the skill loses its purpose.
+
+`scripts/image_gen.py` enforces this at entry via a double guard:
+1. **SENTINEL marker check** — the prompt must start with `# REWRITTEN-V1` (prepended automatically by `rewrite_prompt.py` to every segment). Missing marker → `SystemExit`.
+2. **CJK ratio fallback** — after sentinel passes, if CJK characters > 10% of non-whitespace content, the prompt is also refused (defense against the rewrite LLM occasionally returning Chinese).
+
+**Bypass paths that were removed**:
+- `--no-rewrite` CLI flag
+- `prompt_already_rewritten` config field (batch / task level)
+- Silent fallback to original Chinese on rewrite failure → now batch-wide fail-fast
+- 0-image text2im skipping rewrite → `rewrite_prompt.py` supports text-only mode
+
+**Hard rules for agents**:
+- **Mode 1**: Step 5 must **invoke `python scripts/rewrite_prompt.py`** to perform vision + rewrite + SENTINEL wrap. **Do not hand-craft an English prompt and call `image_gen.py` directly** — the entry guard refuses marker-less prompts. The "Prompt augmentation" / "Specificity policy" sections below describe what `rewrite_prompt.py` internally does; they are reference, not a template for agent-authored prompts.
+- **Mode 2** (batch UX): `batch_runner.py` invokes `rewrite_prompt.py` automatically per task; agents do not intervene.
+- **Rewrite-only mode**: invoke `rewrite_prompt.py`, get the SENTINEL-wrapped output, echo it into chat for the user to copy; do not call `image_gen.py`.
+
+---
+
 ## Preflight (MUST READ FIRST)
 
 **Mainline path**: `scripts/image_gen.py` — used by ALL agents (Codex CLI, Claude Code, WorkBuddy GUI, CodeBuddy CLI). The Codex built-in `image_gen` tool section was removed 2026-05-13; CLI is now the unified path.
@@ -97,13 +118,24 @@ Load each image into context via your vision tool. Write a verbatim 1-2 sentence
 - Avoid list (negative constraints)
 - Size / quality / model preferences
 
-### Step 5: Apply prompt augmentation per Specificity policy
-- Specific & detailed prompt → **normalize only, no extra creative additions**
-- Generic prompt → tasteful augmentation only when it materially improves output (see Prompt augmentation section below)
-- For edits, **preserve invariants** aggressively and repeat them verbatim: `change ONLY X; keep Y unchanged`
+### Step 5: Invoke `scripts/rewrite_prompt.py` (do NOT hand-write the prompt)
 
-### Step 6: Call `scripts/image_gen.py {generate|edit|generate-batch}`
-(Preflight rule 1 applies — direct CLI only.) For transparent output, see "Transparent image requests" section.
+🚨 **Hard Invariant requires**: agents do not author the English prompt themselves. Pass the user's Chinese/English request + image paths + target count N to `rewrite_prompt.py`, which performs vision + rewrite + SENTINEL wrap:
+
+```bash
+python scripts/rewrite_prompt.py \
+  --user-prompt-file user_request.txt \
+  --refs ref1.png,ref2.png \
+  --n 1 \
+  --out rewritten.txt
+```
+
+Each segment in `rewritten.txt` starts with `# REWRITTEN-V1` (segments separated by `---PROMPT-SEP---` when N>1). Step 6 splits each segment into its own file and passes `--prompt-file` to `image_gen.py`.
+
+The "Prompt augmentation" / "Specificity policy" sections below document what `rewrite_prompt.py`'s internal LLM is instructed to do — they help agents explain the output or refine the user's original request, but they are **not** a template for the agent to hand-write a prompt and bypass `rewrite_prompt.py`.
+
+### Step 6: Call `scripts/image_gen.py {generate|edit|generate-batch} --prompt-file <segment>.txt`
+(Preflight rule 1 applies — direct CLI only.) For transparent output, see "Transparent image requests" section. The entry guard verifies the SENTINEL marker before any API call; a marker-less prompt is refused with `SystemExit`.
 
 ### Step 7: Validate output
 Check subject / style / composition / text accuracy / invariants. Iterate with a SINGLE targeted change at a time.
@@ -115,7 +147,7 @@ Check subject / style / composition / text accuracy / invariants. Iterate with a
 
 ## Rewrite-only mode (skip Step 6, output prompt directly in chat)
 
-If user says "rewrite only / prompt only / 不出图 / 只转写 / 给我 prompt / 先看 prompt" → run Workflow Steps 1-5 (subcommand + vision + label + collect + augment) but **skip Step 6** (the `image_gen.py` call). Output the rewritten prompt directly in chat as a markdown fenced code block so user can copy via chat client's built-in "copy code" button.
+If user says "rewrite only / prompt only / 不出图 / 只转写 / 给我 prompt / 先看 prompt" → run Workflow Steps 1-5 (subcommand decision + vision verify + label + collect inputs + invoke `rewrite_prompt.py`) but **skip Step 6** (the `image_gen.py` call). Cat the SENTINEL-wrapped output from Step 5 into chat as a markdown fenced code block so user can copy via chat client's built-in "copy code" button. (If user wants to re-use the prompt with a non-`image_gen.py` tool, they may strip the `# REWRITTEN-V1` first line — it has no semantic meaning for the image model.)
 
 **No image-gen credit consumed.** Use cases:
 - User wants to inspect the rewritten prompt before deciding whether to spend credit on a batch
@@ -246,7 +278,7 @@ Avoid: <negative constraints>
 
 Notes:
 - `Asset type` and `Input images` are prompt scaffolding, not dedicated CLI flags.
-- `Scene/backdrop` refers to the visual setting. It is not the same as the fallback CLI `background` parameter, which controls output transparency behavior.
+- `Scene/backdrop` refers to the visual setting. It is not the same as the `--background` CLI parameter, which controls output transparency behavior.
 - Execution notes like `Quality:`, `Input fidelity:`, masks, output format, and output paths are CLI parameters (passed to `scripts/image_gen.py`) — they are not prompt scaffolding fields.
 
 Augmentation rules:
@@ -522,7 +554,7 @@ agent 发一条简短消息:
 
 **✅ batch_runner 自动做的事**(agent 不要重复):
 
-- ✅ Per-task vision + rewrite: `batch_runner` 调 `scripts/rewrite_prompt.py` 对每个 task 跑 vision + LM rewrite,把用户需求转成 N 段(N=task.n)英文 image-gen prompt。**agent 不要自己再 rewrite 一遍 / 不要在 config 里塞预 rewrite 好的英文 prompt**(除非 task 显式标 `prompt_already_rewritten: true`)。0 refs 时跳过 rewrite(text2im,无图可 vision)。
+- ✅ Per-task vision + rewrite: `batch_runner` 调 `scripts/rewrite_prompt.py` 对每个 task 跑 vision + LM rewrite,把用户需求转成 N 段(N=task.n)英文 image-gen prompt。**agent 不要自己再 rewrite 一遍 / 不要在 config 里塞预 rewrite 好的英文 prompt**。**Invariant**：rewrite 强制走（已删 `--no-rewrite` / `prompt_already_rewritten` 等 bypass 旗子；0 refs 也走 rewrite_prompt 纯文本模式），失败时 batch 整批 fail-fast；`image_gen.py` 入口有 CJK 字符兜底闸（>10% 中文即拒）阻止任何 raw 中文 prompt 触达 API。
 - ✅ N 段不同主体: `rewrite_prompt` 一次产 N 段独立 prompt,N>1 时每段 feature 不同主体(系列多样性)。**agent 不要假设"5 张同 prompt 跑 5 次 sampling"**。
 - ✅ No 13-field schema double-augmentation: `batch_runner` 调 `image_gen.py` 时传 `--no-augment`,因为 rewrite layer 已经在 system prompt 里指导 LLM 写好 prompt 字段。
 

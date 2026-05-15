@@ -32,7 +32,7 @@ config.json schema:
       {
         "task_id": "t01",
         "reference_images": [".../a.png"],   # 0-N 张(0 = text2im / ≥1 = edit)
-        "prompt": "...",            # 中文 prompt(终稿,原样传入,不改)
+        "prompt": "...",            # 用户原始中文需求;batch_runner 会先调 rewrite_prompt 转 N 段英文 prompt 再喂 image_gen
         "n": 1,
         "size": "1024x1536",      # 可选,覆盖 batch 默认
         "quality": "high"         # 可选,覆盖 batch 默认
@@ -48,7 +48,8 @@ config.json schema:
 
 通用规则:
 - 同一 task 内 n 次共享 size/quality 设置
-- prompt 原样传(--no-augment 模式),不假设角色分工
+- 用户中文 prompt 先经 rewrite_prompt.rewrite() 转 N 段英文 prompt(带 SENTINEL marker),再喂 image_gen.py
+- image_gen.py 传 `--no-augment` 避免 13-field schema 双重包装(rewrite 已写好结构化 prompt)
 """
 import argparse
 import json
@@ -83,7 +84,7 @@ def build_cmd(prompt_file: Path, refs: list[Path],
         "--out", str(out_path),
         "--size", size,
         "--quality", quality,
-        "--no-augment",      # 让中文 prompt 原样传(batch UX 终稿模式)
+        "--no-augment",      # rewrite 已包好 prompt,避免 image_gen 二次 13-field schema 包装
         "--force",           # 覆盖 out path 已存在的文件
     ]
     for r in refs:
@@ -169,11 +170,6 @@ def main():
     ap.add_argument("config", help="config.json (由本 skill 的 batch_form.html 生成)")
     ap.add_argument("--dry-run", action="store_true",
                     help="只做校验 + 打印将执行的命令,不真调 image_gen.py(省 credit)")
-    ap.add_argument("--no-rewrite", action="store_true",
-                    help="跳过 vision + rewrite step，直接把 config 里的 prompt 字面喂给 image_gen.py。"
-                         "向后兼容已自己 rewrite 好英文 prompt 的旧 config。"
-                         "也可在 config 里加 \"prompt_already_rewritten\": true 全批跳过，"
-                         "或在单个 task 里加同名字段单 task 跳过。")
     args = ap.parse_args()
 
     cfg_path = Path(args.config)
@@ -329,29 +325,20 @@ def main():
                         print(f"  ! [task {task_id}] copy ref {_ref.name} → out_dir 失败(继续): {_e}", file=sys.stderr, flush=True)
 
         # === Vision + Rewrite (Mode 2 → 跟 Mode 1 对齐的核心能力) ===
-        skip_rewrite = (
-            args.no_rewrite
-            or cfg.get("prompt_already_rewritten")
-            or task.get("prompt_already_rewritten")
-            or len(refs) == 0
-        )
-
+        # Invariant: 实跑路径必走 rewrite(0 refs 也走,rewrite_prompt 支持纯文本)。
+        # 失败 → 异常 propagate → batch 整批 fail-fast。dry-run 不发 API,可用原 prompt 仅作 schema 预览。
         if is_anchor:
             # ===== Anchor mode Phase 1: 同段 prompt × M 次 sampling 出候选 =====
-            if skip_rewrite or args.dry_run:
+            if args.dry_run:
                 cand_prompt = prompt
             else:
                 print(f"\n[task {task_id}] (anchor Phase 1) vision + rewrite ({len(refs)} refs, M={M} candidates)...", flush=True)
-                try:
-                    sys.path.insert(0, str(Path(__file__).parent))
-                    from rewrite_prompt import rewrite as _do_rewrite
-                    _cand_prompts = _do_rewrite(prompt, refs, n=1, anchor_phase="phase1")
-                    cand_prompt = _cand_prompts[0]
-                    (out_dir / f"{task_id}_prompt_original.txt").write_text(prompt, encoding="utf-8")
-                    print(f"[task {task_id}] Phase 1 rewrite done ({len(cand_prompt)} chars)", flush=True)
-                except Exception as e:
-                    print(f"! [task {task_id}] Phase 1 rewrite failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-                    cand_prompt = prompt
+                sys.path.insert(0, str(Path(__file__).parent))
+                from rewrite_prompt import rewrite as _do_rewrite
+                _cand_prompts = _do_rewrite(prompt, refs, n=1, anchor_phase="phase1")
+                cand_prompt = _cand_prompts[0]
+                (out_dir / f"{task_id}_prompt_original.txt").write_text(prompt, encoding="utf-8")
+                print(f"[task {task_id}] Phase 1 rewrite done ({len(cand_prompt)} chars)", flush=True)
 
             cand_prompt_file = out_dir / f"{task_id}_anchor_cand_prompt.txt"
             cand_prompt_file.write_text(cand_prompt, encoding="utf-8")
@@ -395,25 +382,17 @@ def main():
             continue  # 跳过下面的 standard mode logic
 
         # === Standard mode (沿用 N 段独立 prompt 流程) ===
-        if skip_rewrite or args.dry_run:
+        if args.dry_run:
             rewritten_prompts = [prompt] * n
-            if skip_rewrite and not args.dry_run:
-                reason = "0 refs" if len(refs) == 0 else "prompt_already_rewritten / --no-rewrite"
-                print(f"\n[task {task_id}] skip rewrite ({reason}), reusing original × {n}", flush=True)
         else:
             print(f"\n[task {task_id}] vision + rewrite step ({len(refs)} refs, n={n})...", flush=True)
-            try:
-                sys.path.insert(0, str(Path(__file__).parent))
-                from rewrite_prompt import rewrite as _do_rewrite
-                rewritten_prompts = _do_rewrite(prompt, refs, n=n)
-                # 存原始中文 prompt 作 debug trail
-                (out_dir / f"{task_id}_prompt_original.txt").write_text(prompt, encoding="utf-8")
-                total_chars = sum(len(p) for p in rewritten_prompts)
-                print(f"[task {task_id}] rewrite done ({len(rewritten_prompts)} prompts, {total_chars} chars total)", flush=True)
-            except Exception as e:
-                print(f"! [task {task_id}] rewrite failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-                print(f"  falling back to original prompt × {n} — image quality may suffer", file=sys.stderr, flush=True)
-                rewritten_prompts = [prompt] * n
+            sys.path.insert(0, str(Path(__file__).parent))
+            from rewrite_prompt import rewrite as _do_rewrite
+            rewritten_prompts = _do_rewrite(prompt, refs, n=n)
+            # 存原始中文 prompt 作 debug trail
+            (out_dir / f"{task_id}_prompt_original.txt").write_text(prompt, encoding="utf-8")
+            total_chars = sum(len(p) for p in rewritten_prompts)
+            print(f"[task {task_id}] rewrite done ({len(rewritten_prompts)} prompts, {total_chars} chars total)", flush=True)
 
         # 兜底:确保 len == n(rewrite 内部应已保证,这里 belt-and-suspenders)
         while len(rewritten_prompts) < n:
@@ -597,15 +576,11 @@ def main():
             else:
                 new_refs.append(picked_path)
                 anchor_idx = len(new_refs)
-            try:
-                sys.path.insert(0, str(Path(__file__).parent))
-                from rewrite_prompt import rewrite as _do_rewrite
-                series_prompts = _do_rewrite(prompt, new_refs, n=n_series, anchor_phase="phase3", anchor_idx=anchor_idx)
-                total_chars = sum(len(p) for p in series_prompts)
-                print(f"[task {task_id}] Phase 3 rewrite done ({len(series_prompts)} prompts, {total_chars} chars, anchor-locked)", flush=True)
-            except Exception as e:
-                print(f"! [task {task_id}] Phase 3 rewrite failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-                series_prompts = [prompt] * n_series
+            sys.path.insert(0, str(Path(__file__).parent))
+            from rewrite_prompt import rewrite as _do_rewrite
+            series_prompts = _do_rewrite(prompt, new_refs, n=n_series, anchor_phase="phase3", anchor_idx=anchor_idx)
+            total_chars = sum(len(p) for p in series_prompts)
+            print(f"[task {task_id}] Phase 3 rewrite done ({len(series_prompts)} prompts, {total_chars} chars, anchor-locked)", flush=True)
 
             while len(series_prompts) < n_series:
                 series_prompts.append(series_prompts[-1])
