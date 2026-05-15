@@ -1,10 +1,17 @@
 # codex-imagegen-fork
 
-Claude Code / WorkBuddy / 任意 agent 框架的图片生成 skill。**通用图片任务**:单图修改 / 纯文字生图 / 任意题材海报 / 头像 / 图标 / sprite / mockup / 透明背景 / 插画。
+Claude Code / WorkBuddy / 任意 agent 框架的图片生成 skill。**通用图片任务**:单图修改 / 纯文字生图 / 任意题材海报 / 头像 / 图标 / sprite / mockup / 透明背景 / 插画 / 产品照 / logo / 真实摄影 / infographic。
 
-游戏买量广告特化任务(爆款复刻 + 多张系列)请用兄弟 skill [`game-ad-imagegen`](https://github.com/nbssdlkm/game-ad-imagegen)(A 路径)。两个 skill 完全独立,可分别安装。
+游戏买量广告(爆款复刻 + 多张系列 + 锁风格 anchor + 纯文字买量素材)请用兄弟 skill [`game-ad-imagegen`](https://github.com/nbssdlkm/game-ad-imagegen)(A 路径)。两个 skill 完全独立,可分别安装。
 
 > **本 skill 起源**:fork 自 [OpenAI Codex CLI 自带的 imagegen skill](https://github.com/openai/codex)(`codex-rs/skills/src/assets/samples/imagegen/`,commit `fca81ee`,Apache License 2.0,见 [LICENSE.txt](LICENSE.txt))。已经 generic 化改造:删除 Codex built-in tool 相关段、加 First-time setup(零负担 key 配置)、加 Batch UX(HTML 表单 + 增量进度页)、加 vision verify 强制(防 hallucination)。
+
+## v0.1.3 主要改动
+
+- 🚨 **Hard Invariant — Prompt Provenance**:进入 image API 的每一个 prompt 必须来自 `scripts/rewrite_prompt.py`(产出时加 SENTINEL marker `# REWRITTEN-V1`)。`scripts/image_gen.py` 入口 `_augment_prompt_fields` 双闸校验:SENTINEL marker + CJK 字符占比兜底(>10% 拒)。三子命令 (`generate` / `edit` / `generate-batch`) 全部走同一闸
+- 🔧 删除所有 bypass:`--no-rewrite` CLI flag / `prompt_already_rewritten` config 字段 / 0 图 hardcoded `skip_rewrite` / rewrite 失败 silent fallback。失败现在整批 fail-fast
+- 🔧 Rewrite 模型升 `gpt-5.5` → `gpt-5.4` + `reasoning_effort="high"`(模型不支持时自动 fallback 重试)
+- 📄 SKILL.md 顶部加 Hard Invariant — Prompt Provenance 段;Mode 1 Step 5 改为 `invoke rewrite_prompt.py` 而非 hand-craft prompt
 
 ## 快速安装
 
@@ -64,13 +71,14 @@ codex-imagegen-fork/
 
 ## 跟 A skill 的差异化
 
-| | A: game-ad-imagegen | B: codex-imagegen-fork (本 skill) |
+| | A: game-ad-imagegen | B: codex-imagegen-fork(本 skill) |
 |---|---|---|
-| 定位 | 游戏买量广告特化 | 通用图片任务 |
-| 0 图 text2im | ❌ reject | ✅ `generate` 子命令 |
-| 工作流 | 6 步 vision/拆解/选角 | 18 步通用 workflow |
-| 端点 | `/v1/images/edits` 写死 | `generate` / `edit` 自动选 |
-| 装哪个 | 主要做游戏广告 | 通用 / 单图修改 / 文生图 |
+| 定位 | 游戏买量广告特化(爆款复刻 + 多张系列 + 锁风格 anchor + 纯文字 banner) | 通用图片任务(任意题材 / 单图修改 / 文生图 / 产品照 / logo / infographic) |
+| 0 图 text2im | ✅ v0.1.3 起支持(game-ad 特化 system prompt) | ✅ `generate` 子命令(generic taxonomy) |
+| Anchor mode 锁风格 | ✅ Phase 1/2/3 form UI(系列广告画风一致) | ❌ 后端代码 mirror 有但前端无入口(主场景单图无需) |
+| Rewrite system prompt | game-ad 特化(CandidatePool + T9 横版骨架 + 4-5 中文 text 位硬约束) | generic taxonomy(11+8 use-case slug:photorealistic-natural / product-mockup / ui-mockup / infographic / logo-brand 等) |
+| 端点 | 自动选: 0 图 `generations` / ≥1 图 `edits`(v0.1.3 起) | 自动选: `generate` / `edit` / `generate-batch` 子命令 |
+| 装哪个 | 主要做**游戏广告**(含 0 图买量素材) | 主要做**非游戏题材通用图**(产品照 / logo / 写实 / infographic) |
 
 通常**都装上**,agent 根据用户话术自动路由。
 
